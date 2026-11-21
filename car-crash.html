@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>两车 45° 偏置正面碰撞仿真 · Three.js + cannon-es</title>
+<style>
+  /* ===================== 页面基础样式 ===================== */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #0b0f16; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  /* ===================== 控制面板 ===================== */
+  #panel {
+    position: fixed; top: 14px; left: 14px; width: 300px; max-height: calc(100vh - 28px);
+    overflow-y: auto; padding: 14px 14px 12px;
+    background: rgba(15, 23, 42, .82); color: #e2e8f0; border: 1px solid rgba(148,163,184,.25);
+    border-radius: 12px; backdrop-filter: blur(10px); font-size: 13px; line-height: 1.5;
+    box-shadow: 0 10px 30px rgba(0,0,0,.35); z-index: 10;
+  }
+  #panel h1 { font-size: 15px; font-weight: 700; margin-bottom: 2px; color: #f8fafc; }
+  #panel .sub { font-size: 11px; color: #94a3b8; margin-bottom: 10px; }
+  .sec { border-top: 1px solid rgba(148,163,184,.18); padding-top: 10px; margin-top: 10px; }
+  .sec-title { font-size: 12px; color: #7dd3fc; font-weight: 600; margin-bottom: 8px; letter-spacing: .5px; }
+  label.row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 7px 0; }
+  label.row input[type="range"] { flex: 1; }
+  .val { color: #fbbf24; font-variant-numeric: tabular-nums; min-width: 64px; text-align: right; }
+  .checks label { display: flex; align-items: center; gap: 7px; margin: 6px 0; cursor: pointer; }
+  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+  .btns button {
+    padding: 8px 6px; border: 1px solid rgba(148,163,184,.35); border-radius: 8px;
+    background: #1e293b; color: #e2e8f0; font-size: 12.5px; cursor: pointer; transition: .15s;
+  }
+  .btns button:hover { background: #334155; border-color: #7dd3fc; }
+  .btns button.primary { background: #0369a1; border-color: #38bdf8; }
+  .btns button.primary:hover { background: #0284c7; }
+  .btns button.danger { background: #7f1d1d; border-color: #f87171; }
+  .btns .full { grid-column: 1 / -1; }
+  .data-row { display: flex; justify-content: space-between; margin: 4px 0; font-variant-numeric: tabular-nums; }
+  .data-row .k { color: #94a3b8; }
+  .data-row .v { color: #f1f5f9; font-weight: 600; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .tag.ready { background: #1e3a5f; color: #7dd3fc; }
+  .tag.run { background: #14532d; color: #86efac; }
+  .tag.pause { background: #713f12; color: #fde047; }
+  .tag.done { background: #4c1d95; color: #d8b4fe; }
+  #modelInfo { font-size: 11px; color: #94a3b8; word-break: break-all; }
+  #hint {
+    position: fixed; right: 14px; bottom: 12px; z-index: 10;
+    color: #cbd5e1; font-size: 12px; background: rgba(15,23,42,.7); padding: 7px 12px;
+    border-radius: 8px; border: 1px solid rgba(148,163,184,.2);
+  }
+
+  /* ===================== 加载遮罩 ===================== */
+  #loading {
+    position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px;
+    background: #0b0f16; color: #e2e8f0; transition: opacity .5s;
+  }
+  #loading.hide { opacity: 0; pointer-events: none; }
+  .spinner {
+    width: 42px; height: 42px; border: 4px solid rgba(125,211,252,.2);
+    border-top-color: #38bdf8; border-radius: 50%; animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loadText { font-size: 13px; color: #94a3b8; }
+</style>
+
+<!-- ES 模块依赖：版本锁定，仅使用 CDN，无本地静态资源 -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app"></div>
+
+<!-- ===================== 交互控制面板 ===================== -->
+<div id="panel">
+  <h1>45° 偏置正面碰撞仿真</h1>
+  <div class="sub">Three.js 渲染 · cannon-es 刚体物理 · 顶点溃缩模拟</div>
+
+  <div class="sec-title">运行控制</div>
+  <label class="row">
+    碰撞车速（两车相同）
+    <span class="val"><span id="speedVal">50</span> km/h</span>
+  </label>
+  <input type="range" id="speedRange" min="10" max="120" step="1" value="50" style="width:100%" />
+  <div class="btns" style="margin-top:9px">
+    <button id="btnStart" class="primary full">▶ 一键启动碰撞</button>
+    <button id="btnPause">⏸ 暂停</button>
+    <button id="btnReset" class="danger">↺ 重置模拟</button>
+  </div>
+
+  <div class="sec">
+    <div class="sec-title">显示开关</div>
+    <div class="checks">
+      <label><input type="checkbox" id="chkDeform" checked /> 车头溃缩形变效果</label>
+      <label><input type="checkbox" id="chkArrow" checked /> 速度矢量箭头</label>
+      <label><input type="checkbox" id="chkBox" /> 物理包围盒（碰撞体）</label>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-title">相机预设视角</div>
+    <div class="btns">
+      <button id="camTop">全局俯视</button>
+      <button id="camSide">侧面视角</button>
+      <button class="full" id="camClose">碰撞特写视角</button>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-title">实时数据</div>
+    <div class="data-row"><span class="k">仿真状态</span><span id="dataState" class="tag ready">就绪</span></div>
+    <div class="data-row"><span class="k">A 车速度</span><span class="v"><span id="dataSpeedA">0.0</span> km/h</span></div>
+    <div class="data-row"><span class="k">B 车速度</span><span class="v"><span id="dataSpeedB">0.0</span> km/h</span></div>
+    <div class="data-row"><span class="k">瞬时接触力</span><span class="v"><span id="dataForce">0.0</span> kN</span></div>
+    <div class="data-row"><span class="k">峰值接触力</span><span class="v"><span id="dataForcePeak">0.0</span> kN</span></div>
+    <div class="data-row"><span class="k">两车相对角度</span><span class="v"><span id="dataAngle">135.0</span> °</span></div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-title">模型来源</div>
+    <div id="modelInfo">正在尝试加载公网 GLB 模型…</div>
+  </div>
+</div>
+
+<div id="hint">鼠标左键旋转 · 滚轮缩放 · 右键平移</div>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <div id="loadText">正在从网络下载轿车 GLB 模型，请稍候…</div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import * as CANNON from 'cannon-es';
+
+/* =========================================================================
+ * 0. 全局配置常量
+ * ========================================================================= */
+const FIXED_DT = 1 / 60;              // 物理固定步长（与渲染帧率解耦）
+const CAR = {                         // 标准轿车物理外廓（米）
+  length: 4.5, width: 1.9, height: 1.5, mass: 1500
+};
+const HALF = new CANNON.Vec3(CAR.length / 2, CAR.height / 2, CAR.width / 2);
+const YAW_A = THREE.MathUtils.degToRad(22.5);    // A 车航向角
+const YAW_B = THREE.MathUtils.degToRad(157.5);   // B 车航向角（中心线锐角夹角 = 45°）
+const START_Z = 16;                  // 初始纵向距离
+const LATERAL_OFFSET = 0.6;          // 横向偏置（制造部分重叠的偏置碰撞）
+const MAX_CRUSH = CAR.length * 0.19; // 最大视觉溃缩量
+
+// 公网公开免费 GLB 模型候选（Khronos glTF-Sample-Assets · ToyCar），按顺序回退
+const MODEL_URLS = [
+  'https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/ToyCar/glTF-Binary/ToyCar.glb',
+  'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/ToyCar/glTF-Binary/ToyCar.glb'
+];
+const MODEL_TIMEOUT = 12000; // 单个地址超时时间
+
+/* =========================================================================
+ * 1. Three.js 场景搭建：渲染器 / 相机 / 灯光 / 地面网格
+ * ========================================================================= */
+const app = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xaab6c4);
+scene.fog = new THREE.Fog(0xaab6c4, 70, 170);
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 400);
+camera.position.set(0, 26, 6);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.target.set(3, 0, 0);
+controls.maxPolarAngle = Math.PI / 2 - 0.02; // 防止相机穿入地面
+
+// 环境光 + 半球光 + 带阴影方向光
+scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+const hemi = new THREE.HemisphereLight(0xdfefff, 0x475569, 0.75);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffffff, 1.7);
+sun.position.set(20, 30, 14);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -32; sun.shadow.camera.right = 32;
+sun.shadow.camera.top = 32;   sun.shadow.camera.bottom = -32;
+sun.shadow.camera.far = 90;
+scene.add(sun);
+
+// 地面（视觉平面 + 网格辅助线）
+const groundMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(220, 220),
+  new THREE.MeshStandardMaterial({ color: 0x5b6470, roughness: 0.95, metalness: 0 })
+);
+groundMesh.rotation.x = -Math.PI / 2;
+groundMesh.receiveShadow = true;
+scene.add(groundMesh);
+
+const grid = new THREE.GridHelper(140, 70, 0x93c5fd, 0x3f4a5a);
+grid.material.transparent = true;
+grid.material.opacity = 0.55;
+grid.position.y = 0.01;
+scene.add(grid);
+
+/* =========================================================================
+ * 2. cannon-es 物理世界：地面 / 接触材质（刚度·阻尼·摩擦）
+ * ========================================================================= */
+const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
+world.broadphase = new CANNON.SAPBroadphase(world);
+world.allowSleep = false; // 演示过程中禁止刚体休眠
+
+const carPhysMat = new CANNON.Material('car');
+const groundPhysMat = new CANNON.Material('ground');
+
+// 车-地接触：适中摩擦、极低回弹
+world.addContactMaterial(new CANNON.ContactMaterial(carPhysMat, groundPhysMat, {
+  friction: 0.55,
+  restitution: 0.05,
+  contactEquationStiffness: 1e7,
+  contactEquationRelaxation: 3,
+  frictionEquationStiffness: 1e7,
+  frictionEquationRelaxation: 3
+}));
+// 车-车接触：金属车身低回弹、有限摩擦，体现偏转与少量回弹
+world.addContactMaterial(new CANNON.ContactMaterial(carPhysMat, carPhysMat, {
+  friction: 0.4,
+  restitution: 0.08,
+  contactEquationStiffness: 1e7,
+  contactEquationRelaxation: 4,
+  frictionEquationStiffness: 1e7,
+  frictionEquationRelaxation: 4
+}));
+world.defaultContactMaterial.contactEquationStiffness = 1e7;
+world.defaultContactMaterial.contactEquationRelaxation = 4;
+
+// 物理地面：静态平面
+const groundBody = new CANNON.Body({ mass: 0, material: groundPhysMat });
+groundBody.addShape(new CANNON.Plane());
+groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+world.addBody(groundBody);
+
+/* =========================================================================
+ * 3. 车体视觉资源：GLTF 在线加载（超时/失败自动回退程序化车体）
+ * ========================================================================= */
+const loader = new GLTFLoader();
+
+/** 带超时的 GLB 加载 */
+function loadGLBWithTimeout(url) {
+  return Promise.race([
+    loader.loadAsync(url),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('加载超时')), MODEL_TIMEOUT))
+  ]);
+}
+
+/** 程序化简易轿车占位模型（回退方案，保证流程可运行） */
+function buildFallbackCarGroup(color) {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.25 });
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.2, metalness: 0.4 });
+  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
+
+  const addBox = (w, h, d, x, y, z, m = mat) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+    mesh.position.set(x, y, z);
+    g.add(mesh);
+  };
+  addBox(4.2, 0.62, 1.78, 0, 0.72, 0);                 // 车身主体
+  addBox(2.1, 0.6, 1.55, -0.25, 1.32, 0, glassMat);    // 座舱
+  addBox(0.35, 0.28, 1.62, 2.0, 0.78, 0);              // 发动机盖前缘
+  addBox(0.25, 0.22, 1.5, -2.05, 0.82, 0);             // 后备箱
+  const wheelGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.3, 20);
+  wheelGeo.rotateZ(Math.PI / 2);
+  for (const sx of [-1.45, 1.45]) for (const sz of [-0.92, 0.92]) {
+    const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+    wheel.position.set(sx, 0.36, sz);
+    g.add(wheel);
+  }
+  return g;
+}
+
+/**
+ * 将任意 Group 内的全部网格合并为单一 BufferGeometry（保留材质分组），
+ * 再自动适配缩放到标准轿车外廓并居中，使视觉模型与物理碰撞体解耦。
+ */
+function normalizeCarGroup(rootGroup) {
+  rootGroup.updateMatrixWorld(true);
+  const geos = [];
+  const materials = [];
+  rootGroup.traverse((obj) => {
+    if (!obj.isMesh) return;
+    // 统一转非索引几何体，避免索引/非索引混合导致合并失败
+    let geo = obj.geometry.index ? obj.geometry.toNonIndexed() : obj.geometry.clone();
+    // 统一属性集合（position/normal/uv），防止各网格属性不一致导致合并返回 null
+    if (!geo.attributes.normal) geo.computeVertexNormals();
+    if (!geo.attributes.uv) {
+      geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count * 2), 2));
+    }
+    for (const name of Object.keys(geo.attributes)) {
+      if (name !== 'position' && name !== 'normal' && name !== 'uv') geo.deleteAttribute(name);
+    }
+    geo.applyMatrix4(obj.matrixWorld);
+    geos.push(geo);
+    materials.push(obj.material);
+  });
+  const merged = mergeGeometries(geos, true);
+  if (!merged) throw new Error('几何体合并失败，属性不兼容');
+
+  // 自动缩放：最长水平边对齐车长，同时限制宽、高不超出物理外廓
+  merged.computeBoundingBox();
+  const size = merged.boundingBox.getSize(new THREE.Vector3());
+  const horizMax = Math.max(size.x, size.z);
+  const horizMin = Math.min(size.x, size.z);
+  const scale = Math.min(
+    CAR.length / horizMax,
+    CAR.width / horizMin,
+    CAR.height / size.y
+  );
+  merged.scale(scale, scale, scale);
+
+  // 居中到局部原点（视觉网格原点 = 物理刚体质心）
+  merged.computeBoundingBox();
+  const c = merged.boundingBox.getCenter(new THREE.Vector3());
+  merged.translate(-c.x, -c.y, -c.z);
+
+  // 统一朝向约定：模型长轴对齐局部 Z 轴（物理与速度箭头均以 +Z 为车头方向）
+  merged.computeBoundingBox();
+  const alignedSize = merged.boundingBox.getSize(new THREE.Vector3());
+  if (alignedSize.x > alignedSize.z) merged.rotateY(Math.PI / 2);
+  merged.computeVertexNormals();
+  return { geometry: merged, materials };
+}
+
+/** 依次尝试候选 URL，全部失败则回退 */
+async function loadCarResources() {
+  for (const url of MODEL_URLS) {
+    try {
+      const gltf = await loadGLBWithTimeout(url);
+      const normalized = normalizeCarGroup(gltf.scene);
+      return { ...normalized, source: url, fallback: false };
+    } catch (err) {
+      console.warn('[模型加载失败]', url, err);
+    }
+  }
+  // 回退：程序化车体（单车单色材质）
+  const fb = buildFallbackCarGroup(0x3b82f6);
+  const normalized = normalizeCarGroup(fb);
+  return { ...normalized, source: '内置程序化占位车体（GLB 加载失败）', fallback: true };
+}
+
+/* =========================================================================
+ * 4. 顶点溃缩形变器（简易非 FEM 方案，仅作用于视觉网格）
+ * ========================================================================= */
+class CrumpleDeformer {
+  /**
+   * @param {THREE.BufferGeometry} geometry 已居中的整车几何体
+   */
+  constructor(geometry) {
+    this.geo = geometry;
+    this.attr = geometry.attributes.position;
+    this.base = new Float32Array(this.attr.array); // 原始顶点备份
+    this.count = this.attr.count;
+    this.crush = 0;                                // 累计溃缩深度（米）
+    this.contactDir = new THREE.Vector3(0, 0, 1);  // 车体局部空间的接触方向
+    // 预生成确定性伪随机数，保证褶皱稳定、不闪烁
+    this.noise1 = new Float32Array(this.count);
+    this.noise2 = new Float32Array(this.count);
+    for (let i = 0; i < this.count; i++) {
+      this.noise1[i] = this._rand(i * 2 + 1);
+      this.noise2[i] = this._rand(i * 2 + 7);
+    }
+  }
+  _rand(i) {
+    const s = Math.sin(i * 12.9898) * 43758.5453;
+    return s - Math.floor(s);
+  }
+  /** 更新接触方向（局部空间，水平化） */
+  setContactDir(dir) {
+    this.contactDir.copy(dir);
+    this.contactDir.y = 0;
+    if (this.contactDir.lengthSq() < 1e-6) this.contactDir.set(0, 0, 1);
+    this.contactDir.normalize();
+  }
+  /** 按接触闭合速度累计溃缩量 */
+  accumulate(closingSpeed, dt) {
+    this.crush = Math.min(MAX_CRUSH, this.crush + closingSpeed * dt * 0.35);
+  }
+  reset() {
+    this.crush = 0;
+    this.attr.array.set(this.base);
+    this.attr.needsUpdate = true;
+    this.geo.computeVertexNormals();
+  }
+  /** 依据接触方向对接触端顶点做后移 + 褶皱扰动，模拟吸能盒溃缩 */
+  apply() {
+    const a = this.attr.array;
+    const b = this.base;
+    const dx = this.contactDir.x;
+    const dz = this.contactDir.z;
+    const px = -dz, pz = dx;                    // 水平侧向（褶皱方向）
+    const halfL = CAR.length / 2;
+    const start = halfL * 0.08;                 // 形变起始投影位置
+    const range = halfL - start;
+    const crush = this.crush;
+
+    for (let i = 0; i < this.count; i++) {
+      const i3 = i * 3;
+      const x = b[i3], y = b[i3 + 1], z = b[i3 + 2];
+      const proj = x * dx + z * dz;             // 顶点沿接触方向的投影
+      let t = (proj - start) / range;
+      if (t <= 0) {                             // 非碰撞区保持原始形状
+        a[i3] = x; a[i3 + 1] = y; a[i3 + 2] = z;
+        continue;
+      }
+      t = Math.min(1, t);
+      const w = Math.pow(t, 1.6) * crush;       // 越靠近端点形变量越大
+      const wrinkle = (this.noise1[i] - 0.5) * 0.5 * w;
+      a[i3]     = x - dx * w + px * wrinkle;
+      a[i3 + 1] = y - 0.18 * w + (this.noise2[i] - 0.5) * 0.3 * w; // 轻微下压
+      a[i3 + 2] = z - dz * w + pz * wrinkle;
+    }
+    this.attr.needsUpdate = true;
+    this.geo.computeVertexNormals();
+  }
+}
+
+/* =========================================================================
+ * 5. 仿真整车实体：物理刚体 + 视觉组 + 可视化辅助件
+ * ========================================================================= */
+class CarEntity {
+  constructor(id, resources, startPos, yaw, arrowColor) {
+    this.id = id;
+    // --- 物理刚体：独立盒形碰撞体，与视觉模型分离 ---
+    this.body = new CANNON.Body({
+      mass: CAR.mass,
+      material: carPhysMat,
+      linearDamping: 0.08,      // 平动阻尼
+      angularDamping: 0.18      // 转动阻尼，抑制非真实翻滚
+    });
+    this.body.addShape(new CANNON.Box(new CANNON.Vec3(HALF.x, HALF.y, HALF.z)));
+    this.body.position.set(startPos.x, HALF.y, startPos.z);
+    this.body.quaternion.setFromEuler(0, yaw, 0);
+    world.addBody(this.body);
+
+    // --- 视觉组（位置/朝向每帧从刚体同步） ---
+    this.group = new THREE.Group();
+    scene.add(this.group);
+
+    // 每车独立克隆几何体（形变互不影响），材质可共享
+    const geo = resources.geometry.clone();
+    this.mesh = new THREE.Mesh(geo, resources.materials);
+    this.mesh.castShadow = true;
+    this.mesh.receiveShadow = true;
+    this.group.add(this.mesh);
+    this.deformer = new CrumpleDeformer(geo);
+
+    // --- 物理包围盒可视化（默认关闭） ---
+    const boxGeo = new THREE.BoxGeometry(HALF.x * 2, HALF.y * 2, HALF.z * 2);
+    const edges = new THREE.EdgesGeometry(boxGeo);
+    this.boxHelper = new THREE.LineSegments(
+      edges,
+      new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.85 })
+    );
+    this.boxHelper.visible = false;
+    this.group.add(this.boxHelper);
+
+    // --- 速度矢量箭头 ---
+    this.arrow = new THREE.ArrowHelper(
+      new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 1.2, 0),
+      3, arrowColor, 0.55, 0.32
+    );
+    this.group.add(this.arrow);
+
+    // 初始状态备份，供重置使用
+    this.startPos = new CANNON.Vec3(startPos.x, HALF.y, startPos.z);
+    this.startQuat = new CANNON.Quaternion().setFromEuler(0, yaw, 0);
+  }
+
+  /** 按当前航向赋予设定初速度 */
+  applySpeed(speedMS) {
+    const fwd = this.body.quaternion.vmult(new CANNON.Vec3(0, 0, 1));
+    this.body.velocity.set(fwd.x * speedMS, 0, fwd.z * speedMS);
+    this.body.angularVelocity.set(0, 0, 0);
+    this.body.wakeUp();
+  }
+
+  /** 刚体 -> 视觉模型同步 */
+  syncVisual() {
+    this.group.position.set(this.body.position.x, this.body.position.y, this.body.position.z);
+    this.group.quaternion.set(
+      this.body.quaternion.x, this.body.quaternion.y,
+      this.body.quaternion.z, this.body.quaternion.w
+    );
+  }
+
+  /** 速度箭头刷新 */
+  updateArrow(visible) {
+    const v = this.body.velocity;
+    const speed = v.length();
+    if (!visible || speed < 0.4) {
+      this.arrow.visible = false;
+      return;
+    }
+    this.arrow.visible = true;
+    this.arrow.setDirection(new THREE.Vector3(v.x, 0, v.z).normalize());
+    this.arrow.setLength(THREE.MathUtils.clamp(speed * 0.32, 1.0, 7.5), 0.55, 0.32);
+  }
+
+  reset() {
+    this.body.position.copy(this.startPos);
+    this.body.quaternion.copy(this.startQuat);
+    this.body.velocity.setZero();
+    this.body.angularVelocity.setZero();
+    this.body.force.setZero();
+    this.body.torque.setZero();
+    this.body.wakeUp();
+    this.deformer.reset();
+    this.syncVisual();
+  }
+}
+
+/* =========================================================================
+ * 6. 碰撞标记：碰撞点红球 + 接触法线箭头
+ * ========================================================================= */
+const collisionMarkers = new THREE.Group();
+scene.add(collisionMarkers);
+let markerSphere = null;
+let normalArrow = null;
+
+function clearCollisionMarkers() {
+  if (markerSphere) { collisionMarkers.remove(markerSphere); markerSphere.geometry.dispose(); markerSphere = null; }
+  if (normalArrow) { collisionMarkers.remove(normalArrow); normalArrow = null; }
+}
+
+function placeCollisionMarker(point, normal) {
+  if (markerSphere) return; // 仅标记首次碰撞瞬间
+  markerSphere = new THREE.Mesh(
+    new THREE.SphereGeometry(0.14, 20, 20),
+    new THREE.MeshStandardMaterial({ color: 0xff2d2d, emissive: 0x8b0000, emissiveIntensity: 1.2 })
+  );
+  markerSphere.position.copy(point);
+  collisionMarkers.add(markerSphere);
+
+  normalArrow = new THREE.ArrowHelper(
+    normal.clone().normalize(), point.clone(), 2.0,
+    0xff3b30, 0.5, 0.28
+  );
+  collisionMarkers.add(normalArrow);
+}
+
+/* =========================================================================
+ * 7. 仿真状态机与固定步长物理步进（与渲染循环分离）
+ * ========================================================================= */
+const sim = {
+  state: 'ready',          // ready | running | paused | done
+  contacted: false,
+  speedKmh: 50,
+  currentForce: 0,
+  peakForce: 0,
+  deformEnabled: true,
+  arrowEnabled: true,
+  boxEnabled: false
+};
+
+let carA, carB;
+
+function resetSimulation() {
+  carA.reset();
+  carB.reset();
+  sim.state = 'ready';
+  sim.contacted = false;
+  sim.currentForce = 0;
+  sim.peakForce = 0;
+  clearCollisionMarkers();
+  refreshStateTag();
+}
+
+/** 单个固定步长结束后的碰撞求解：接触力 / 碰撞点 / 溃缩驱动 */
+function postPhysicsStep() {
+  let forceSum = 0;
+  let contactEquation = null;
+  let closingSpeed = 0;
+
+  // 法向接触方程
+  for (const eq of world.contacts) {
+    const pair = (eq.bi === carA.body && eq.bj === carB.body) ||
+                 (eq.bi === carB.body && eq.bj === carA.body);
+    if (!pair) continue;
+    forceSum += Math.abs(eq.multiplier) / FIXED_DT; // λ 为冲量量级，除以步长得力
+    contactEquation = eq;
+    const vn = eq.getImpactVelocityAlongNormal();   // 负值表示相互接近
+    if (vn < 0) closingSpeed = Math.max(closingSpeed, -vn);
+  }
+  // 摩擦接触方程
+  for (const eq of world.frictionEquations) {
+    const pair = (eq.bi === carA.body && eq.bj === carB.body) ||
+                 (eq.bi === carB.body && eq.bj === carA.body);
+    if (pair) forceSum += Math.abs(eq.multiplier) / FIXED_DT;
+  }
+
+  sim.currentForce = forceSum;
+  sim.peakForce = Math.max(sim.peakForce, forceSum);
+
+  if (contactEquation) {
+    const eq = contactEquation;
+    // 碰撞点世界坐标 = 刚体中心 + 接触臂
+    const point = new THREE.Vector3(
+      eq.bi.position.x + eq.ri.x,
+      eq.bi.position.y + eq.ri.y,
+      eq.bi.position.z + eq.ri.z
+    );
+    const normal = new THREE.Vector3(eq.ni.x, eq.ni.y, eq.ni.z);
+
+    // 首次接触：放置红色碰撞点与法线
+    if (!sim.contacted) {
+      sim.contacted = true;
+      placeCollisionMarker(point, normal);
+    }
+
+    // 顶点溃缩（受开关控制）
+    if (sim.deformEnabled && closingSpeed > 0.05) {
+      for (const car of [carA, carB]) {
+        car.group.updateWorldMatrix(true, false);
+        const localPoint = car.group.worldToLocal(point.clone());
+        const dir = new THREE.Vector3(localPoint.x, 0, localPoint.z);
+        car.deformer.setContactDir(dir);
+        car.deformer.accumulate(closingSpeed, FIXED_DT);
+        car.deformer.apply();
+      }
+    }
+  }
+
+  // 碰撞后两车基本停止 -> 完成（不要求脱离接触，摩擦中减速同样算数）
+  if (sim.contacted && sim.state === 'running' &&
+      carA.body.velocity.length() < 0.6 && carB.body.velocity.length() < 0.6) {
+    sim.state = 'done';
+    refreshStateTag();
+  }
+}
+
+/* =========================================================================
+ * 8. UI 绑定
+ * ========================================================================= */
+const $ = (id) => document.getElementById(id);
+
+const STATE_LABELS = {
+  ready: ['就绪', 'ready'], running: ['仿真进行中', 'run'],
+  paused: ['已暂停', 'pause'], done: ['碰撞完成', 'done']
+};
+function refreshStateTag() {
+  const el = $('dataState');
+  const [text, cls] = STATE_LABELS[sim.state];
+  el.textContent = text;
+  el.className = 'tag ' + cls;
+  $('btnPause').textContent = sim.state === 'paused' ? '▶ 继续' : '⏸ 暂停';
+}
+
+$('speedRange').addEventListener('input', (e) => {
+  sim.speedKmh = Number(e.target.value);
+  $('speedVal').textContent = sim.speedKmh;
+  // 碰撞前拖动滑杆：实时更新两车初速度
+  if (sim.state === 'running' && !sim.contacted) {
+    const v = sim.speedKmh / 3.6;
+    carA.applySpeed(v);
+    carB.applySpeed(v);
+  }
+});
+
+$('btnStart').addEventListener('click', () => {
+  if (sim.state === 'paused') { sim.state = 'running'; refreshStateTag(); return; }
+  if (sim.state === 'running') return;
+  resetSimulation();
+  const v = sim.speedKmh / 3.6;
+  carA.applySpeed(v);
+  carB.applySpeed(v);
+  sim.state = 'running';
+  refreshStateTag();
+});
+
+$('btnPause').addEventListener('click', () => {
+  if (sim.state === 'running') sim.state = 'paused';
+  else if (sim.state === 'paused') sim.state = 'running';
+  refreshStateTag();
+});
+
+$('btnReset').addEventListener('click', resetSimulation);
+
+$('chkDeform').addEventListener('change', (e) => {
+  sim.deformEnabled = e.target.checked;
+  if (!sim.deformEnabled) { carA.deformer.reset(); carB.deformer.reset(); }
+});
+$('chkArrow').addEventListener('change', (e) => { sim.arrowEnabled = e.target.checked; });
+$('chkBox').addEventListener('change', (e) => {
+  sim.boxEnabled = e.target.checked;
+  carA.boxHelper.visible = carB.boxHelper.visible = sim.boxEnabled;
+});
+
+// 相机预设：保存位置与注视点，切换后仍可用鼠标自由轨道控制
+const CAMERA_PRESETS = {
+  top:   { pos: [0, 30, 5],    target: [3, 0, 0] },
+  side:  { pos: [4, 6, 21],    target: [4, 0, -1] },
+  close: { pos: [6.8, 2.4, 5.2], target: [6.4, 0.7, -1.6] }
+};
+function applyCameraPreset(key) {
+  const p = CAMERA_PRESETS[key];
+  camera.position.set(...p.pos);
+  controls.target.set(...p.target);
+  controls.update();
+}
+$('camTop').addEventListener('click', () => applyCameraPreset('top'));
+$('camSide').addEventListener('click', () => applyCameraPreset('side'));
+$('camClose').addEventListener('click', () => applyCameraPreset('close'));
+
+/* =========================================================================
+ * 9. 窗口自适应
+ * ========================================================================= */
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+/* =========================================================================
+ * 10. 主循环：渲染与物理解耦，固定步长累加器驱动
+ * ========================================================================= */
+const clock = new THREE.Clock();
+let accumulator = 0;
+let hudTimer = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+  const frameDt = Math.min(clock.getDelta(), 0.1); // 防止后台切回时步长爆炸
+
+  // 物理：仅在运行状态按固定 1/60 步进，帧率波动不影响仿真结果
+  if (sim.state === 'running') {
+    accumulator += frameDt;
+    let steps = 0;
+    while (accumulator >= FIXED_DT && steps < 5) {
+      world.step(FIXED_DT);
+      postPhysicsStep();
+      accumulator -= FIXED_DT;
+      steps++;
+    }
+    if (steps === 5) accumulator = 0; // 掉帧保护：丢弃积压时间
+  }
+
+  // 渲染：每帧同步视觉体（暂停时依然渲染，便于环绕观察）
+  carA.syncVisual();
+  carB.syncVisual();
+  carA.updateArrow(sim.arrowEnabled);
+  carB.updateArrow(sim.arrowEnabled);
+  controls.update();
+  renderer.render(scene, camera);
+
+  // HUD 文本降频刷新（约 8Hz）
+  hudTimer += frameDt;
+  if (hudTimer > 0.12) {
+    hudTimer = 0;
+    $('dataSpeedA').textContent = (carA.body.velocity.length() * 3.6).toFixed(1);
+    $('dataSpeedB').textContent = (carB.body.velocity.length() * 3.6).toFixed(1);
+    $('dataForce').textContent = (sim.currentForce / 1000).toFixed(1);
+    $('dataForcePeak').textContent = (sim.peakForce / 1000).toFixed(1);
+    // 相对角度：两车航向矢量夹角
+    const fA = carA.body.quaternion.vmult(new CANNON.Vec3(0, 0, 1));
+    const fB = carB.body.quaternion.vmult(new CANNON.Vec3(0, 0, 1));
+    const dot = THREE.MathUtils.clamp(fA.x * fB.x + fA.z * fB.z, -1, 1);
+    $('dataAngle').textContent = THREE.MathUtils.radToDeg(Math.acos(dot)).toFixed(1);
+  }
+}
+
+/* =========================================================================
+ * 11. 启动流程：加载模型 -> 创建两车 -> 进入主循环
+ * ========================================================================= */
+(async function bootstrap() {
+  const resources = await loadCarResources();
+  $('modelInfo').textContent =
+    (resources.fallback ? '⚠ 回退模型：' : '✓ 在线 GLB：') + resources.source;
+  $('loadText').textContent = '模型就绪，正在初始化物理世界…';
+
+  // 45° 偏置对向布置：航向角相差 135°（车身中心线锐角夹角 45°），横向错位偏置
+  carA = new CarEntity('A', resources, { x: LATERAL_OFFSET, z: -START_Z }, YAW_A, 0x22ff99);
+  carB = new CarEntity('B', resources, { x: -LATERAL_OFFSET, z: START_Z }, YAW_B, 0xffa03a);
+  carA.syncVisual();
+  carB.syncVisual();
+  resetSimulation();
+
+  document.getElementById('loading').classList.add('hide');
+  animate();
+})();
+</script>
+</body>
+</html>
